@@ -15,24 +15,25 @@ player_right = pygame.image.load("player_right.png").convert_alpha()
 player_left = pygame.image.load("player_left.png").convert_alpha()
 sword_img = pygame.image.load("sword.png").convert_alpha()
 
-# Resize if needed
+# Resize
 PLAYER_SIZE = (96, 96)
 SWORD_SIZE = (96, 128)
 player_right = pygame.transform.scale(player_right, PLAYER_SIZE)
 player_left = pygame.transform.scale(player_left, PLAYER_SIZE)
 sword_img = pygame.transform.scale(sword_img, SWORD_SIZE)
 
-# Player settings
+# Player state
 player_pos = [WIDTH // 2, HEIGHT // 2]
 player_speed = 6
 facing = "right"
 
-# Sword settings
+# Sword swing state
 swinging = False
 swing_duration = 400  # ms
 swing_start_time = 0
 max_angle = 120
 
+# Score and font
 score = 0
 font = pygame.font.SysFont(None, 36)
 
@@ -64,11 +65,8 @@ def move_enemies():
             enemies.remove(e)
 
 def draw_sword(angle):
-    # Sword pivot point is offset from player
     offset_x = 60 if facing == "right" else -60
     pivot = (player_pos[0] + PLAYER_SIZE[0] // 2 + offset_x, player_pos[1] + PLAYER_SIZE[1] // 2)
-
-    # Create rotated sword
     rotated_sword = pygame.transform.rotate(sword_img, -angle if facing == "right" else angle)
     sword_rect = rotated_sword.get_rect(center=pivot)
     screen.blit(rotated_sword, sword_rect.topleft)
@@ -86,6 +84,7 @@ def show_score():
     text = font.render(f"Punkte: {score}", True, (0, 0, 0))
     screen.blit(text, (10, 10))
 
+# Game loop
 running = True
 while running:
     dt = clock.tick(60)
@@ -111,17 +110,15 @@ while running:
         swinging = True
         swing_start_time = now
 
-    # Animate sword
     angle = 0
     if swinging:
         elapsed = now - swing_start_time
         if elapsed < swing_duration:
             progress = elapsed / swing_duration
-            angle = max_angle * math.sin(progress * math.pi)  # smooth swing curve
+            angle = max_angle * math.sin(progress * math.pi)  # smooth curve
         else:
             swinging = False
 
-    # Game logic
     if pygame.time.get_ticks() % 1000 < 20:
         spawn_enemy()
 
@@ -129,7 +126,11 @@ while running:
     draw_enemies()
     draw_player()
     sword_rect = draw_sword(angle)
-    check_collision(sword_rect)
+    
+    # ✅ Only allow hits during swing
+    if swinging:
+        check_collision(sword_rect)
+
     show_score()
     pygame.display.flip()
 
