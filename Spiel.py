@@ -1,5 +1,6 @@
 import pygame
 import random
+import sqlite3
 
 # --- Initialization ---
 pygame.init()
@@ -81,6 +82,60 @@ font = pygame.font.SysFont(None, 36)
 # --- Game State ---
 game_over = False
 
+# --- Database setup ---
+def init_db():
+    conn = sqlite3.connect("highscore.db")
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS highscores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            score INTEGER NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_highscore():
+    conn = sqlite3.connect("highscore.db")
+    c = conn.cursor()
+    c.execute('SELECT MAX(score) FROM highscores')
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result[0] is not None else 0
+
+def update_highscore(new_score):
+    current = get_highscore()
+    if new_score > current:
+        conn = sqlite3.connect("highscore.db")
+        c = conn.cursor()
+        c.execute('INSERT INTO highscores (score) VALUES (?)', (new_score,))
+        conn.commit()
+        conn.close()
+
+# --- Menu ---
+def show_start_menu():
+    highscore = get_highscore()
+    title_font = pygame.font.SysFont(None, 72)
+    info_font = pygame.font.SysFont(None, 36)
+    while True:
+        screen.fill(WHITE)
+        title_text = title_font.render("Magic Sword vs Monsters", True, BLACK)
+        prompt_text = info_font.render("Press SPACE to Start", True, BLACK)
+        highscore_text = info_font.render(f"Highscore: {highscore}", True, BLACK)
+        screen.blit(title_text, title_text.get_rect(center=(WIDTH//2, HEIGHT//3)))
+        screen.blit(highscore_text, highscore_text.get_rect(center=(WIDTH//2, HEIGHT//2)))
+        screen.blit(prompt_text, prompt_text.get_rect(center=(WIDTH//2, HEIGHT//1.5)))
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    return
+
+# --- Helper functions ---
 def get_rank(combo):
     if combo >= 20:
         return "SSS"
@@ -166,7 +221,7 @@ def draw_falling_objects():
         pygame.draw.rect(screen, (100, 100, 100), (f[0], f[1], fall_size, fall_size))
 
 def move_falling_objects():
-    global score, combo, lives, game_over
+    global lives, combo, game_over
     for f in falling_objects[:]:
         f[1] += fall_speed
         player_rect = pygame.Rect(player_pos[0], player_pos[1], 96, 96)
@@ -211,9 +266,19 @@ def show_ui():
     screen.blit(icon, icon_rect.topleft)
 
 def show_game_over():
-    text = font.render("Game Over - Press R to Restart", True, BLACK)
-    rect = text.get_rect(center=(WIDTH//2, HEIGHT//2))
-    screen.blit(text, rect)
+    game_over_text = font.render("Game Over", True, BLACK)
+    restart_text = font.render("R: Neustart", True, BLACK)
+    menu_text = font.render("M: Hauptmenü", True, BLACK)
+
+    screen.blit(game_over_text, game_over_text.get_rect(center=(WIDTH//2, HEIGHT//2 - 50)))
+    screen.blit(restart_text, restart_text.get_rect(center=(WIDTH//2, HEIGHT//2)))
+    screen.blit(menu_text, menu_text.get_rect(center=(WIDTH//2, HEIGHT//2 + 50)))
+
+# --- Initialize database ---
+init_db()
+
+# --- Show start menu ---
+show_start_menu()
 
 # --- Game Loop ---
 running = True
@@ -230,14 +295,32 @@ while running:
         screen.blit(background_img, (0, 0))
         show_game_over()
         pygame.display.flip()
-        if keys[pygame.K_r]:
-            lives = 3
-            score = 0
-            combo = 0
-            monsters.clear()
-            falling_objects.clear()
-            swing_phase = "idle"
-            game_over = False
+
+        # Highscore prüfen und ggf. aktualisieren
+        if score > get_highscore():
+            update_highscore(score)
+
+        for event in pygame.event.get():
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    # Neustart
+                    lives = 3
+                    score = 0
+                    combo = 0
+                    monsters.clear()
+                    falling_objects.clear()
+                    swing_phase = "idle"
+                    game_over = False
+                elif event.key == pygame.K_m:
+                    # Zurück ins Hauptmenü
+                    show_start_menu()
+                    lives = 3
+                    score = 0
+                    combo = 0
+                    monsters.clear()
+                    falling_objects.clear()
+                    swing_phase = "idle"
+                    game_over = False
         continue
 
     if now - last_kill_time > 3000:
@@ -272,37 +355,39 @@ while running:
             swing_phase = "retract"
             swing_start_ms = now
     elif swing_phase == "retract":
-        t = min(elapsed / retract_duration, 1.0)
-        swing_angle = (1 - t) * max_swing_angle
-        thrust_offset = (1 - t) * max_thrust
-        pivot_drop = (1 - t) * max_pivot_drop
+        t = 1 - min(elapsed / retract_duration, 1.0)
+        swing_angle = t * max_swing_angle
+        thrust_offset = t * max_thrust
+        pivot_drop = t * max_pivot_drop
         if elapsed >= retract_duration:
             swing_phase = "idle"
-            swing_angle = thrust_offset = pivot_drop = 0
+            swing_angle = 0
+            thrust_offset = 0
+            pivot_drop = 0
 
-    current_rank = get_rank(combo)
-    current_spawn_interval = get_spawn_interval(current_rank)
+    screen.blit(background_img, (0, 0))
+    draw_player()
+    sword_rect = draw_sword(swing_angle, thrust_offset, pivot_drop)
+    draw_monsters()
+    draw_falling_objects()
+    move_monsters()
+    move_falling_objects()
+    check_monster_collision()
+    check_collision(sword_rect, now)
 
-    if len(monsters) < MAX_MONSTERS and now - last_monster_spawn > current_spawn_interval:
+    # Monster spawn
+    rank = get_rank(combo)
+    spawn_interval = get_spawn_interval(rank)
+    if now - last_monster_spawn > spawn_interval and len(monsters) < MAX_MONSTERS:
         spawn_monster()
         last_monster_spawn = now
 
-    if current_rank in ["S", "SS", "SSS"] and random.random() < fall_spawn_chance * 1.5:
-        spawn_falling_object()
-    elif random.random() < fall_spawn_chance:
+    # Falling objects spawn
+    if random.random() < fall_spawn_chance:
         spawn_falling_object()
 
-    move_monsters()
-    check_monster_collision()
-    move_falling_objects()
-
-    screen.blit(background_img, (0, 0))
-    draw_monsters()
-    draw_falling_objects()
-    sword_rect = draw_sword(swing_angle, thrust_offset, pivot_drop)
-    draw_player()
-    check_collision(sword_rect, now)
     show_ui()
+
     pygame.display.flip()
 
 pygame.quit()
